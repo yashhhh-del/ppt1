@@ -62,11 +62,11 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 📖 How to Use")
     st.markdown("""
-    1. Enter Anthropic API key (required)
-    2. Enter topic and preferences
+    1. Enter OpenRouter API key (required)
+    2. Enter ANY topic you want
     3. Add Stability key for AI images (optional)
-    4. Click 'Generate Presentation'
-    5. Download your custom PPT!
+    4. Select Free or Paid model
+    5. Click 'Generate' and get your PPT!
     """)
     st.markdown("---")
     st.markdown("### 🔗 Get API Keys")
@@ -283,9 +283,11 @@ def create_powerpoint(slides_content, theme, image_mode, stability_key, category
 col1, col2 = st.columns([1, 1])
 
 with col1:
-    st.subheader("📝 Presentation Details")
+    st.subheader("📝 Your Topic")
     
-    topic = st.text_input("Topic *", placeholder="e.g., Climate Change Solutions, AI in Healthcare, Marketing Strategy 2025")
+    topic = st.text_input("Enter ANY Topic *", placeholder="e.g., Space Exploration, Cooking Recipes, Football History, Math Education...")
+    
+    st.caption("💡 Enter any topic - AI will create relevant slides automatically!")
     
     category = st.selectbox(
         "Category *",
@@ -314,7 +316,8 @@ with col2:
     
     image_mode = st.selectbox(
         "Image Mode *",
-        ["AI", "None"]
+        ["AI", "None"],
+        help="Select 'AI' to generate images for each slide (requires Stability AI key)"
     )
     
     english_variant = st.selectbox(
@@ -332,7 +335,8 @@ key_points = st.text_area(
 
 # Generate button
 st.markdown("---")
-generate_button = st.button("🚀 Generate Custom PowerPoint", use_container_width=True)
+st.info("✨ Enter ANY topic and click generate - AI will create custom content and images!")
+generate_button = st.button("🚀 Generate PowerPoint on My Topic", use_container_width=True)
 
 # Generation logic
 if generate_button:
@@ -395,7 +399,8 @@ if generate_button:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 1rem;'>
-    <p>💡 <strong>Tip:</strong> Be specific with your topic for best results!</p>
-    <p>Examples: "AI in Healthcare 2025", "Sustainable Energy Solutions", "Digital Marketing Trends"</p>
+    <p>💡 <strong>Works with ANY topic!</strong> Try: "History of Pizza", "Quantum Physics", "Yoga Benefits", "Video Game Design"</p>
+    <p>🎨 Add Stability AI key to generate custom images for your topic!</p>
+    <p><strong>Free Model Available</strong> - No credits needed to start!</p>
 </div>
 """, unsafe_allow_html=True)
