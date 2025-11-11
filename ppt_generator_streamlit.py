@@ -45,7 +45,9 @@ with st.sidebar:
     st.header("⚙️ API Configuration")
     
     # Claude API Key
-    claude_api_key = st.text_input("Anthropic API Key *", type="password", help="Required: For generating presentation content")
+    claude_api_key = st.text_input("OpenRouter API Key *", type="password", help="Required: For generating presentation content")
+    
+    st.info("💡 Using OpenRouter API (supports Claude & other models)")
     
     # Stability API Key (Optional)
     stability_api_key = st.text_input("Stability AI API Key (Optional)", type="password", help="Optional: For AI-generated images")
@@ -61,12 +63,12 @@ with st.sidebar:
     """)
     st.markdown("---")
     st.markdown("### 🔗 Get API Keys")
-    st.markdown("[Anthropic API](https://console.anthropic.com)")
+    st.markdown("[OpenRouter API](https://openrouter.ai/keys)")
     st.markdown("[Stability AI](https://platform.stability.ai)")
 
-# Function to generate content using Claude
+# Function to generate content using Claude via OpenRouter
 def generate_content_with_claude(api_key, topic, category, slide_count, tone, audience, key_points):
-    """Generate presentation content using Claude AI"""
+    """Generate presentation content using Claude AI via OpenRouter"""
     try:
         prompt = f"""You are an expert corporate presentation creator. Generate a detailed PowerPoint presentation structure.
 
@@ -105,15 +107,13 @@ Rules:
 Return ONLY valid JSON, no markdown, no explanation."""
 
         response = requests.post(
-            "https://api.anthropic.com/v1/messages",
+            "https://openrouter.ai/api/v1/chat/completions",
             headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
+                "Authorization": f"Bearer {api_key.strip()}",
+                "Content-Type": "application/json",
             },
             json={
-                "model": "claude-sonnet-4-20250514",
-                "max_tokens": 4000,
+                "model": "anthropic/claude-3.5-sonnet",
                 "messages": [
                     {"role": "user", "content": prompt}
                 ]
@@ -122,7 +122,7 @@ Return ONLY valid JSON, no markdown, no explanation."""
         
         if response.status_code == 200:
             data = response.json()
-            content_text = data["content"][0]["text"]
+            content_text = data["choices"][0]["message"]["content"]
             
             # Clean JSON response
             content_text = content_text.strip()
@@ -138,7 +138,7 @@ Return ONLY valid JSON, no markdown, no explanation."""
             slides_data = json.loads(content_text)
             return slides_data["slides"]
         else:
-            st.error(f"Claude API Error: {response.text}")
+            st.error(f"OpenRouter API Error: {response.text}")
             return None
             
     except Exception as e:
@@ -323,7 +323,9 @@ generate_button = st.button("🚀 Generate Custom PowerPoint", use_container_wid
 # Generation logic
 if generate_button:
     if not claude_api_key:
-        st.error("⚠️ Please enter your Anthropic API key in the sidebar.")
+        st.error("⚠️ Please enter your OpenRouter API key in the sidebar.")
+    elif not claude_api_key.startswith("sk-or-"):
+        st.error("⚠️ Invalid OpenRouter API key format. It should start with 'sk-or-'")
     elif not topic:
         st.error("⚠️ Please enter a topic for your presentation.")
     elif image_mode == "AI" and not stability_api_key:
