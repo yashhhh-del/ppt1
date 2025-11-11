@@ -6,7 +6,9 @@ from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
 from pptx.dml.color import RGBColor
+from PIL import Image
 import time
+import json
 
 # Page configuration
 st.set_page_config(
@@ -40,14 +42,13 @@ st.markdown("""
 st.markdown('<div class="main-header">📊 AI PowerPoint Generator</div>', unsafe_allow_html=True)
 st.markdown("---")
 
-# Sidebar for API Keys
+# Sidebar
 with st.sidebar:
     st.header("⚙️ API Configuration")
     
-    # Claude API Key
-    claude_api_key = st.text_input("OpenRouter API Key *", type="password", help="Required: For generating presentation content")
+    claude_api_key = st.text_input("OpenRouter API Key *", type="password", 
+                                    help="Required: For generating presentation content")
     
-    # Model selection
     model_choice = st.selectbox(
         "AI Model",
         ["Free Model (Google Gemini)", "Claude 3.5 Sonnet (Paid)"],
@@ -56,198 +57,158 @@ with st.sidebar:
     
     st.info("💡 Using OpenRouter API")
     
-    # Stability API Key (Optional)
-    stability_api_key = st.text_input("Stability AI API Key (Optional)", type="password", help="Optional: For AI-generated images")
+    # Pexels API (Optional but recommended)
+    pexels_api_key = st.text_input(
+        "Pexels API Key (Optional)", 
+        type="password",
+        help="FREE! Get better topic-relevant images. Sign up at: https://www.pexels.com/api/"
+    )
     
-    if stability_api_key:
-        st.success("✅ Stability API key detected!")
+    if pexels_api_key:
+        st.success("✅ Pexels connected - will search for topic-specific images!")
+    
+    stability_api_key = st.text_input("Stability AI API Key (Optional)", type="password", 
+                                      help="Optional: For AI-generated images")
     
     st.markdown("---")
     st.markdown("### 📖 How to Use")
     st.markdown("""
-    1. Enter OpenRouter API key (required)
-    2. Enter ANY topic you want
-    3. Select image mode
-    4. Click 'Generate' and get your PPT!
+    1. Enter OpenRouter API key
+    2. **Optional:** Add Pexels key for better images
+    3. Enter your presentation topic
+    4. Click Generate!
     """)
     st.markdown("---")
     st.markdown("### 🔗 Get API Keys")
+    st.markdown("🆓 [Pexels API (FREE)](https://www.pexels.com/api/)")
     st.markdown("[OpenRouter API](https://openrouter.ai/keys)")
     st.markdown("[Stability AI](https://platform.stability.ai)")
-    st.markdown("---")
-    st.warning("💰 Low credits? Reduce slides or upgrade at OpenRouter")
 
-# Function to generate content using Claude via OpenRouter
-def generate_content_with_claude(api_key, topic, category, slide_count, tone, audience, key_points, model_choice):
-    """Generate presentation content using AI via OpenRouter"""
+# ============ IMAGE FUNCTIONS ============
+
+def generate_topic_search_terms(main_topic, slide_title, image_prompt):
+    """Generate search terms prioritizing topic relevance"""
+    search_terms = []
+    
+    # 1. AI's specific image prompt
+    if image_prompt and image_prompt.strip():
+        search_terms.append(image_prompt.strip())
+    
+    # 2. Topic + slide title combined
+    if main_topic and slide_title:
+        search_terms.append(f"{main_topic} {slide_title}")
+    
+    # 3. Just slide title
+    if slide_title:
+        search_terms.append(slide_title)
+    
+    # 4. Just main topic
+    if main_topic:
+        search_terms.append(main_topic)
+    
+    # Remove duplicates
+    seen = set()
+    unique = []
+    for term in search_terms:
+        lower = term.lower().strip()
+        if lower and lower not in seen:
+            seen.add(lower)
+            unique.append(term)
+    
+    return unique
+
+def get_unsplash_image(query, width=800, height=600):
+    """Get image from Unsplash"""
     try:
-        # Select model based on user choice
-        if "Free" in model_choice:
-            model = "google/gemini-2.0-flash-exp:free"
-        else:
-            model = "anthropic/claude-3.5-sonnet"
+        clean_query = query.strip().replace(' ', ',')
+        url = f"https://source.unsplash.com/{width}x{height}/?{clean_query}"
         
-        # Calculate appropriate max_tokens based on slide count
-        calculated_tokens = min(slide_count * 150 + 200, 1500)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
         
-        prompt = f"""You are an expert corporate presentation creator. Generate a detailed PowerPoint presentation structure.
+        response = requests.get(url, timeout=15, allow_redirects=True, headers=headers)
+        
+        if response.status_code == 200 and len(response.content) > 5000:
+            # Validate image
+            try:
+                img = Image.open(io.BytesIO(response.content))
+                if img.size[0] > 400 and img.size[1] > 300:
+                    return response.content
+            except:
+                pass
+        return None
+    except:
+        return None
 
-Topic: {topic}
-Category: {category}
-Slide Count: {slide_count}
-Tone: {tone}
-Audience: {audience}
-Additional Points: {key_points if key_points else "None"}
-
-Return ONLY a JSON structure with this exact format:
-{{
-  "slides": [
-    {{
-      "title": "Title here (max 8 words)",
-      "bullets": [],
-      "image_prompt": "simple description for image search"
-    }},
-    {{
-      "title": "Slide title",
-      "bullets": ["Bullet 1 (max 12 words)", "Bullet 2", "Bullet 3", "Bullet 4"],
-      "image_prompt": "simple image description"
-    }}
-  ]
-}}
-
-Rules:
-- First slide: Title only, no bullets
-- Each slide needs: title, bullets (3-5 per slide), image_prompt
-- Image prompts should be simple, 2-3 words (e.g., "business meeting", "technology abstract", "growth chart")
-- Last slide should be conclusion/next steps
-- Total slides: exactly {slide_count}
-
-Return ONLY valid JSON, no markdown, no explanation."""
-
-        response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key.strip()}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "max_tokens": calculated_tokens,
-                "messages": [
-                    {"role": "user", "content": prompt}
-                ]
-            }
-        )
+def get_pexels_image(query, api_key):
+    """Get image from Pexels API"""
+    if not api_key:
+        return None
+    
+    try:
+        url = "https://api.pexels.com/v1/search"
+        headers = {"Authorization": api_key}
+        params = {
+            "query": query,
+            "per_page": 3,
+            "orientation": "landscape"
+        }
+        
+        response = requests.get(url, headers=headers, params=params, timeout=10)
         
         if response.status_code == 200:
             data = response.json()
-            content_text = data["choices"][0]["message"]["content"]
-            
-            # Clean JSON response
-            content_text = content_text.strip()
-            if content_text.startswith("```json"):
-                content_text = content_text[7:]
-            if content_text.startswith("```"):
-                content_text = content_text[3:]
-            if content_text.endswith("```"):
-                content_text = content_text[:-3]
-            content_text = content_text.strip()
-            
-            import json
-            slides_data = json.loads(content_text)
-            return slides_data["slides"]
-        else:
-            error_data = response.json()
-            if response.status_code == 402:
-                st.error("💳 Insufficient credits! Options:")
-                st.info("1. Reduce number of slides\n2. Add credits at https://openrouter.ai/settings/credits")
-            else:
-                st.error(f"OpenRouter API Error: {response.text}")
-            return None
-            
-    except Exception as e:
-        st.error(f"Error generating content: {str(e)}")
+            if data.get("photos"):
+                photo = data["photos"][0]
+                img_url = photo["src"]["large"]
+                
+                img_response = requests.get(img_url, timeout=10)
+                if img_response.status_code == 200:
+                    return img_response.content
+        return None
+    except:
         return None
 
-# Function to get free image from Pexels (topic-relevant, free API)
-def get_pexels_image(query, width=800, height=600):
-    """Get topic-relevant free image from Pexels"""
-    try:
-        # Pexels doesn't require API key for basic access via their website CDN
-        # We'll use their search and grab images
-        clean_query = query.replace(' ', '+')
+def get_topic_relevant_image(main_topic, slide_title, image_prompt, pexels_key=None):
+    """Get highly relevant image for the topic"""
+    
+    st.write(f"   🎯 Topic: {main_topic}")
+    st.write(f"   📄 Slide: {slide_title}")
+    
+    # Generate search terms
+    search_terms = generate_topic_search_terms(main_topic, slide_title, image_prompt)
+    st.write(f"   🔍 Will try {len(search_terms)} search variations")
+    
+    # Try each search term
+    for i, term in enumerate(search_terms, 1):
+        st.write(f"      → Search {i}: '{term}'")
         
-        # Try multiple search variations
-        search_terms = [
-            query,
-            query.split()[0] if ' ' in query else query,
-            f"business {query}",
-        ]
+        # Try Pexels first if available
+        if pexels_key:
+            image_data = get_pexels_image(term, pexels_key)
+            if image_data:
+                st.write(f"      ✅ Found on Pexels!")
+                return image_data
         
-        for term in search_terms:
-            try:
-                # Use Lorem Picsum with better seed for more relevant images
-                seed = abs(hash(term)) % 10000
-                url = f"https://picsum.photos/seed/{seed}/{width}/{height}"
-                response = requests.get(url, timeout=5)
-                if response.status_code == 200:
-                    st.write(f"      📸 Found image for: {term}")
-                    return response.content
-            except:
-                continue
-                
-    except Exception as e:
-        st.warning(f"   Pexels error: {str(e)}")
+        # Try Unsplash
+        image_data = get_unsplash_image(term)
+        if image_data:
+            st.write(f"      ✅ Found on Unsplash!")
+            return image_data
+    
+    # Fallback to generic topic
+    st.write(f"   🆘 Trying generic fallback...")
+    fallback = main_topic.split()[0] if main_topic else "business"
+    image_data = get_unsplash_image(fallback)
+    if image_data:
+        st.write(f"      ✅ Got fallback image")
+        return image_data
+    
     return None
 
-# Function to get free image from Picsum (more reliable than Unsplash)
-def get_picsum_image(seed_text, width=800, height=600):
-    """Get random image from Picsum - always works"""
-    try:
-        # Use seed based on text for consistency
-        seed = abs(hash(seed_text)) % 1000
-        image_url = f"https://picsum.photos/seed/{seed}/{width}/{height}"
-        
-        response = requests.get(image_url, timeout=10)
-        if response.status_code == 200:
-            return response.content
-    except Exception as e:
-        st.warning(f"Picsum error: {str(e)}")
-    return None
-
-# Function to get free image from Unsplash
-def get_unsplash_image(query, width=800, height=600):
-    """Get free image from Unsplash based on query - most topic-relevant!"""
-    try:
-        # Clean and prepare query
-        clean_query = query.strip().lower().replace(' ', ',')
-        
-        # Try direct query first
-        image_url = f"https://source.unsplash.com/{width}x{height}/?{clean_query}"
-        
-        st.write(f"      🔍 Searching Unsplash for: {clean_query}")
-        response = requests.get(image_url, timeout=10, allow_redirects=True)
-        
-        if response.status_code == 200 and len(response.content) > 1000:
-            st.write(f"      ✅ Found topic-relevant image!")
-            return response.content
-            
-        # Try with more generic terms if specific fails
-        if ' ' in query:
-            fallback_query = query.split()[0]  # Use first word
-            image_url = f"https://source.unsplash.com/{width}x{height}/?{fallback_query}"
-            response = requests.get(image_url, timeout=10, allow_redirects=True)
-            if response.status_code == 200:
-                st.write(f"      ✅ Found related image for: {fallback_query}")
-                return response.content
-                
-    except Exception as e:
-        st.warning(f"   Unsplash error: {str(e)}")
-    return None
-
-# Function to generate image using Stability AI (V2 API)
-def generate_image_stability_v2(api_key, prompt):
-    """Generate image using Stability AI V2 API"""
+def generate_image_stability(api_key, prompt):
+    """Generate AI image using Stability AI"""
     try:
         url = "https://api.stability.ai/v2beta/stable-image/generate/core"
         
@@ -259,120 +220,106 @@ def generate_image_stability_v2(api_key, prompt):
             },
             files={"none": ''},
             data={
-                "prompt": f"{prompt}, professional, clean, abstract, minimal",
+                "prompt": f"{prompt}, professional, clean, abstract",
                 "output_format": "png",
             },
         )
         
         if response.status_code == 200:
             return response.content
-        else:
-            st.error(f"Stability V2 Error {response.status_code}: {response.text[:200]}")
-            return None
-            
-    except Exception as e:
-        st.error(f"Stability V2 Exception: {str(e)}")
+        return None
+    except:
         return None
 
-# Function to generate image using Stability AI (V1 API - fallback)
-def generate_image_stability_v1(api_key, prompt):
-    """Generate image using Stability AI V1 API"""
+# ============ CONTENT GENERATION ============
+
+def generate_content_with_claude(api_key, topic, category, slide_count, tone, audience, key_points, model_choice):
+    """Generate presentation content using AI"""
     try:
-        url = "https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image"
+        model = "google/gemini-2.0-flash-exp:free" if "Free" in model_choice else "anthropic/claude-3.5-sonnet"
+        calculated_tokens = min(slide_count * 150 + 200, 1500)
         
+        prompt = f"""You are an expert presentation creator. Generate a PowerPoint structure about: {topic}
+
+Category: {category}
+Slides: {slide_count}
+Tone: {tone}
+Audience: {audience}
+Key Points: {key_points if key_points else "None"}
+
+Return ONLY valid JSON in this format:
+{{
+  "slides": [
+    {{
+      "title": "Presentation Title",
+      "bullets": [],
+      "image_prompt": "{topic} title image"
+    }},
+    {{
+      "title": "Slide Title",
+      "bullets": ["Point 1", "Point 2", "Point 3"],
+      "image_prompt": "specific image description related to {topic}"
+    }}
+  ]
+}}
+
+CRITICAL: image_prompt must be specific to {topic}. Examples:
+- For "Space Exploration": use "astronaut spacewalk", "mars rover", "space station"
+- For "Cooking": use "chef cooking", "fresh ingredients", "plated dish"
+- For "AI": use "artificial intelligence", "neural network", "robot technology"
+
+Make image prompts HIGHLY SPECIFIC to the topic "{topic}".
+Total slides: exactly {slide_count}
+Return ONLY JSON, no markdown."""
+
         response = requests.post(
-            url,
+            "https://openrouter.ai/api/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {api_key.strip()}",
                 "Content-Type": "application/json",
             },
             json={
-                "text_prompts": [{"text": prompt, "weight": 1}],
-                "cfg_scale": 7,
-                "height": 512,
-                "width": 512,
-                "samples": 1,
-                "steps": 30,
-            },
+                "model": model,
+                "max_tokens": calculated_tokens,
+                "messages": [{"role": "user", "content": prompt}]
+            }
         )
         
         if response.status_code == 200:
             data = response.json()
-            if "artifacts" in data and len(data["artifacts"]) > 0:
-                return base64.b64decode(data["artifacts"][0]["base64"])
+            content_text = data["choices"][0]["message"]["content"]
+            
+            # Clean JSON
+            content_text = content_text.strip()
+            if content_text.startswith("```json"):
+                content_text = content_text[7:]
+            if content_text.startswith("```"):
+                content_text = content_text[3:]
+            if content_text.endswith("```"):
+                content_text = content_text[:-3]
+            content_text = content_text.strip()
+            
+            slides_data = json.loads(content_text)
+            return slides_data["slides"]
         else:
-            st.error(f"Stability V1 Error {response.status_code}: {response.text[:200]}")
-        return None
+            if response.status_code == 402:
+                st.error("💳 Insufficient credits! Reduce slides or add credits.")
+            else:
+                st.error(f"API Error: {response.text}")
+            return None
             
     except Exception as e:
-        st.error(f"Stability V1 Exception: {str(e)}")
+        st.error(f"Error: {str(e)}")
         return None
 
-# Main image generation function with fallbacks
-def get_image_for_slide(image_mode, stability_key, prompt, slide_title, slide_num):
-    """Get image with multiple fallback options - ALWAYS TOPIC RELEVANT"""
-    
-    st.write(f"🖼️ Getting image for slide {slide_num}: '{slide_title}'")
-    st.write(f"   Search terms: '{prompt}'")
-    
-    image_data = None
-    
-    # Try based on selected mode
-    if image_mode == "AI Generated (Paid)" and stability_key:
-        st.write("   🤖 Trying Stability AI V2...")
-        image_data = generate_image_stability_v2(stability_key, prompt)
-        
-        if not image_data:
-            st.write("   🔄 V2 failed, trying V1...")
-            image_data = generate_image_stability_v1(stability_key, prompt)
-            
-        # Fallback to Unsplash if AI fails
-        if not image_data:
-            st.write("   🔄 AI failed, trying Unsplash as fallback...")
-            image_data = get_unsplash_image(prompt, 800, 600)
-    
-    elif image_mode == "Free Images (Unsplash)":
-        st.write("   🔍 Searching Unsplash for topic-relevant image...")
-        image_data = get_unsplash_image(prompt, 800, 600)
-        
-        if not image_data:
-            st.write("   🔄 Unsplash failed, trying Pexels...")
-            image_data = get_pexels_image(prompt, 800, 600)
-            
-        if not image_data:
-            st.write("   🔄 Trying Unsplash with slide title...")
-            image_data = get_unsplash_image(slide_title, 800, 600)
-    
-    elif image_mode == "Free Images (Picsum)":
-        st.write("   📸 Using Picsum with topic-based seed...")
-        # Use prompt to generate consistent seed for topic relevance
-        image_data = get_picsum_image(prompt, 800, 600)
-    
-    # Universal fallback - try Unsplash with generic terms
-    if not image_data and image_mode != "None":
-        st.write("   🆘 Final fallback: trying generic topic search...")
-        generic_terms = ["business professional", "technology abstract", "modern design"]
-        for term in generic_terms:
-            image_data = get_unsplash_image(term, 800, 600)
-            if image_data:
-                st.write(f"      ✅ Got fallback image: {term}")
-                break
-    
-    if image_data:
-        st.success(f"   ✅ Successfully got image! Size: {len(image_data)} bytes")
-        return image_data
-    else:
-        st.error(f"   ❌ Could not get any image for slide {slide_num}")
-        return None
+# ============ POWERPOINT CREATION ============
 
-# Function to create PowerPoint
-def create_powerpoint(slides_content, theme, image_mode, stability_key, category, audience):
+def create_powerpoint(slides_content, theme, image_mode, stability_key, pexels_key, category, audience, topic):
     """Create PowerPoint presentation"""
     prs = Presentation()
     prs.slide_width = Inches(10)
     prs.slide_height = Inches(7.5)
     
-    # Define theme colors
     themes = {
         "Corporate Blue": {"bg": RGBColor(240, 248, 255), "accent": RGBColor(31, 119, 180), "text": RGBColor(0, 0, 0)},
         "Gradient Modern": {"bg": RGBColor(240, 242, 246), "accent": RGBColor(138, 43, 226), "text": RGBColor(0, 0, 0)},
@@ -389,17 +336,16 @@ def create_powerpoint(slides_content, theme, image_mode, stability_key, category
         status_text.text(f"Creating slide {idx + 1}/{len(slides_content)}...")
         progress_bar.progress((idx + 1) / len(slides_content))
         
-        # Add blank slide
         blank_slide_layout = prs.slide_layouts[6]
         slide = prs.slides.add_slide(blank_slide_layout)
         
-        # Set background color
+        # Background
         background = slide.background
         fill = background.fill
         fill.solid()
         fill.fore_color.rgb = color_scheme["bg"]
         
-        # Add title
+        # Title
         title_box = slide.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(9), Inches(1))
         title_frame = title_box.text_frame
         title_frame.text = slide_data["title"]
@@ -408,7 +354,7 @@ def create_powerpoint(slides_content, theme, image_mode, stability_key, category
         title_frame.paragraphs[0].font.color.rgb = color_scheme["accent"]
         title_frame.paragraphs[0].alignment = PP_ALIGN.CENTER if idx == 0 else PP_ALIGN.LEFT
         
-        # Add bullets (if not first slide)
+        # Bullets
         if idx > 0 and slide_data.get("bullets"):
             bullet_box = slide.shapes.add_textbox(Inches(0.5), Inches(2), Inches(5.5), Inches(4.5))
             text_frame = bullet_box.text_frame
@@ -422,7 +368,7 @@ def create_powerpoint(slides_content, theme, image_mode, stability_key, category
                 p.font.color.rgb = color_scheme["text"]
                 p.space_after = Pt(12)
         
-        # Add subtitle on first slide
+        # Subtitle on first slide
         if idx == 0:
             subtitle_box = slide.shapes.add_textbox(Inches(0.5), Inches(3), Inches(9), Inches(1))
             subtitle_frame = subtitle_box.text_frame
@@ -431,17 +377,24 @@ def create_powerpoint(slides_content, theme, image_mode, stability_key, category
             subtitle_frame.paragraphs[0].font.color.rgb = color_scheme["text"]
             subtitle_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
         
-        # Add image to every content slide
+        # Add images to content slides
         if idx > 0 and image_mode != "None":
-            with st.expander(f"🖼️ Image for Slide {idx + 1}", expanded=False):
-                image_prompt = slide_data.get("image_prompt", slide_data["title"])
-                image_data = get_image_for_slide(
-                    image_mode, 
-                    stability_key, 
-                    image_prompt, 
-                    slide_data["title"],
-                    idx + 1
-                )
+            with st.expander(f"🖼️ Slide {idx + 1}: {slide_data['title']}", expanded=False):
+                image_prompt = slide_data.get("image_prompt", "")
+                image_data = None
+                
+                if image_mode == "AI Generated (Paid)" and stability_key:
+                    st.write("   🤖 Generating AI image...")
+                    image_data = generate_image_stability(stability_key, image_prompt)
+                
+                if not image_data and image_mode != "None":
+                    st.write("   🔍 Searching for topic-relevant image...")
+                    image_data = get_topic_relevant_image(
+                        main_topic=topic,
+                        slide_title=slide_data["title"],
+                        image_prompt=image_prompt,
+                        pexels_key=pexels_key
+                    )
                 
                 if image_data:
                     try:
@@ -450,150 +403,96 @@ def create_powerpoint(slides_content, theme, image_mode, stability_key, category
                         top = Inches(2)
                         width = Inches(3)
                         pic = slide.shapes.add_picture(image_stream, left, top, width=width)
-                        st.success(f"✅ Image successfully added to slide {idx + 1}!")
+                        st.success(f"   ✅ Image added successfully!")
                     except Exception as e:
-                        st.error(f"❌ Failed to add image to PPT: {str(e)}")
-                        import traceback
-                        st.code(traceback.format_exc())
+                        st.error(f"   ❌ Failed to add image: {str(e)}")
                 else:
-                    st.warning(f"⚠️ No image added to slide {idx + 1}")
+                    st.warning(f"   ⚠️ No image found")
             
-            # Small delay for API rate limiting
-            if image_mode == "AI Generated (Paid)":
-                time.sleep(1)
+            time.sleep(0.5)
     
     progress_bar.progress(1.0)
-    status_text.text("✅ Presentation created successfully!")
+    status_text.text("✅ Presentation created!")
     
     return prs
 
-# Main content
+# ============ MAIN UI ============
+
 col1, col2 = st.columns([1, 1])
 
 with col1:
     st.subheader("📝 Your Topic")
+    topic = st.text_input("Enter Topic *", placeholder="e.g., Space Exploration, Digital Marketing, Climate Change...")
+    st.caption("💡 Be specific! The more detailed your topic, the better the images will match.")
     
-    topic = st.text_input("Enter ANY Topic *", placeholder="e.g., Space Exploration, Cooking Recipes, Football History...")
-    
-    st.caption("💡 Enter any topic - AI will create relevant slides automatically!")
-    
-    category = st.selectbox(
-        "Category *",
-        ["Business", "Pitch", "Marketing", "Technical", "Academic", "Training"]
-    )
-    
-    slide_count = st.number_input("Number of Slides *", min_value=3, max_value=15, value=6, 
-                                   help="⚠️ More slides = more tokens needed. Start with 6-8 slides.")
-    
-    tone = st.selectbox(
-        "Tone *",
-        ["Formal", "Neutral", "Inspirational"]
-    )
+    category = st.selectbox("Category *", ["Business", "Pitch", "Marketing", "Technical", "Academic", "Training"])
+    slide_count = st.number_input("Number of Slides *", min_value=3, max_value=15, value=6)
+    tone = st.selectbox("Tone *", ["Formal", "Neutral", "Inspirational"])
 
 with col2:
-    st.subheader("🎨 Style & Audience")
-    
-    audience = st.selectbox(
-        "Audience *",
-        ["Investors", "Students", "Corporate", "Clients", "Managers"]
-    )
-    
-    theme = st.selectbox(
-        "Theme Style *",
-        ["Corporate Blue", "Gradient Modern", "Minimal Dark", "Pastel Soft"]
-    )
+    st.subheader("🎨 Style & Images")
+    audience = st.selectbox("Audience *", ["Investors", "Students", "Corporate", "Clients", "Managers"])
+    theme = st.selectbox("Theme *", ["Corporate Blue", "Gradient Modern", "Minimal Dark", "Pastel Soft"])
     
     image_mode = st.selectbox(
         "Image Mode *",
-        ["Free Images (Unsplash)", "AI Generated (Paid)", "None"],
-        help="Unsplash: FREE topic-relevant images! AI: Custom generated (requires Stability key)"
-    )
-    
-    english_variant = st.selectbox(
-        "English Variant *",
-        ["US", "UK"]
+        ["Free Images (Auto)", "AI Generated (Paid)", "None"],
+        help="Auto: Uses Unsplash/Pexels for topic-relevant free images"
     )
 
-# Additional key points
-st.subheader("➕ Additional Key Points (Optional)")
-key_points = st.text_area(
-    "Enter specific points you want to cover (one per line)",
-    placeholder="- Focus on sustainability\n- Include case studies\n- Emphasize ROI",
-    height=100
-)
+st.subheader("➕ Additional Points (Optional)")
+key_points = st.text_area("Key points to cover", placeholder="- Point 1\n- Point 2", height=80)
 
-# Generate button
 st.markdown("---")
-st.info("✨ **Unsplash mode gets TOPIC-RELEVANT images for FREE!** No API key needed!")
-st.warning("💡 **Important:** Use FREE Google Gemini model if you're low on credits!")
+st.info("🎯 **Topic-Specific Images**: AI will search for images that match YOUR topic!")
+st.warning("💡 **Tip**: Add a FREE Pexels API key in sidebar for even better image matching!")
+
 generate_button = st.button("🚀 Generate PowerPoint", use_container_width=True)
 
-# Generation logic
 if generate_button:
     if not claude_api_key:
-        st.error("⚠️ Please enter your OpenRouter API key in the sidebar.")
-    elif not claude_api_key.startswith("sk-or-"):
-        st.error("⚠️ Invalid OpenRouter API key format. It should start with 'sk-or-'")
+        st.error("⚠️ Enter OpenRouter API key")
     elif not topic:
-        st.error("⚠️ Please enter a topic for your presentation.")
-    elif image_mode == "AI Generated (Paid)" and not stability_api_key:
-        st.error("⚠️ Stability AI key required for AI Generated images. Please add your key or switch to free images.")
+        st.error("⚠️ Enter a topic")
     else:
-        with st.spinner("🤖 AI is analyzing your topic and creating custom content..."):
-            try:
-                st.info(f"🎨 Image Mode: {image_mode}")
+        with st.spinner("🤖 Generating your presentation..."):
+            slides_content = generate_content_with_claude(
+                claude_api_key, topic, category, slide_count, 
+                tone, audience, key_points, model_choice
+            )
+            
+            if slides_content:
+                st.success("✅ Content generated! Adding topic-relevant images...")
                 
-                # Generate content with Claude
-                slides_content = generate_content_with_claude(
-                    claude_api_key, topic, category, slide_count, 
-                    tone, audience, key_points, model_choice
+                prs = create_powerpoint(
+                    slides_content, theme, image_mode, 
+                    stability_api_key, pexels_api_key,
+                    category, audience, topic
                 )
                 
-                if slides_content:
-                    st.success("✅ Content generated! Now creating PowerPoint with images...")
-                    
-                    # Create PowerPoint
-                    prs = create_powerpoint(
-                        slides_content, theme, image_mode, 
-                        stability_api_key if image_mode == "AI Generated (Paid)" else None,
-                        category, audience
-                    )
-                    
-                    # Save to BytesIO
-                    pptx_io = io.BytesIO()
-                    prs.save(pptx_io)
-                    pptx_io.seek(0)
-                    
-                    st.success("🎉 PowerPoint created successfully!")
-                    
-                    # Show preview
-                    with st.expander("📄 Preview Slide Titles"):
-                        for i, slide in enumerate(slides_content):
-                            st.write(f"**Slide {i+1}:** {slide['title']}")
-                    
-                    # Download button
-                    st.download_button(
-                        label="📥 Download PowerPoint",
-                        data=pptx_io,
-                        file_name=f"{topic.replace(' ', '_')}.pptx",
-                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                    )
-                    
-            except requests.exceptions.RequestException as e:
-                st.error(f"❌ API Error: {str(e)}")
-            except Exception as e:
-                st.error(f"❌ An error occurred: {str(e)}")
-                import traceback
-                st.code(traceback.format_exc())
+                pptx_io = io.BytesIO()
+                prs.save(pptx_io)
+                pptx_io.seek(0)
+                
+                st.success("🎉 PowerPoint ready!")
+                
+                with st.expander("📄 Preview"):
+                    for i, slide in enumerate(slides_content):
+                        st.write(f"**Slide {i+1}:** {slide['title']}")
+                        if slide.get('image_prompt'):
+                            st.caption(f"   🖼️ Image: {slide['image_prompt']}")
+                
+                st.download_button(
+                    label="📥 Download PowerPoint",
+                    data=pptx_io,
+                    file_name=f"{topic.replace(' ', '_')}.pptx",
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                )
 
-# Footer
 st.markdown("---")
 st.markdown("""
-<div style='text-align: center; color: #666; padding: 1rem;'>
-    <p>💡 <strong>Works with ANY topic!</strong></p>
-    <p>🎨 <strong>Unsplash (FREE)</strong> - Gets images RELEVANT to your topic automatically!</p>
-    <p>🤖 <strong>AI Generated</strong> - Custom images (needs Stability AI key + credits)</p>
-    <p>🆓 <strong>Use "Free Model (Google Gemini)"</strong> to avoid credit issues!</p>
-    <p>⚠️ <strong>Low on credits?</strong> Reduce slides or upgrade at <a href="https://openrouter.ai/settings/credits">OpenRouter</a></p>
+<div style='text-align: center; color: #666;'>
+    <p>🎯 <strong>Images match YOUR topic automatically!</strong></p>
+    <p>🆓 <strong>Get Pexels API</strong> (free) for best results: <a href="https://www.pexels.com/api/">pexels.com/api</a></p>
 </div>
 """, unsafe_allow_html=True)
