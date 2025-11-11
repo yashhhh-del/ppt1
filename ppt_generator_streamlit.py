@@ -201,46 +201,81 @@ def generate_image_stability(api_key, prompt):
     try:
         st.write(f"🎨 Generating AI image with prompt: {prompt[:50]}...")
         
+        # Try the newer API endpoint first
         response = requests.post(
-            "https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image",
+            "https://api.stability.ai/v2beta/stable-image/generate/core",
             headers={
                 "Authorization": f"Bearer {api_key.strip()}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
+                "Accept": "image/*"
             },
-            json={
-                "text_prompts": [
-                    {
-                        "text": f"{prompt}, professional, clean, abstract, minimal, no text, no words, no letters",
-                        "weight": 1
-                    },
-                    {
-                        "text": "blurry, bad quality, text, watermark, signature, words, letters",
-                        "weight": -1
-                    }
-                ],
-                "cfg_scale": 7,
-                "height": 512,
-                "width": 512,
-                "samples": 1,
-                "steps": 30,
+            files={
+                "none": ''
+            },
+            data={
+                "prompt": f"{prompt}, professional, clean, abstract, minimal, no text, no words, no letters",
+                "output_format": "png",
+                "aspect_ratio": "1:1"
             },
         )
         
+        st.write(f"📡 API Response Status: {response.status_code}")
+        
         if response.status_code == 200:
-            data = response.json()
-            if "artifacts" in data and len(data["artifacts"]) > 0:
-                image_data = base64.b64decode(data["artifacts"][0]["base64"])
-                st.success(f"✅ Image generated successfully!")
-                return image_data
-            else:
-                st.error(f"No image in response: {data}")
-                return None
+            # V2 API returns image directly
+            image_data = response.content
+            st.success(f"✅ Image generated successfully! Size: {len(image_data)} bytes")
+            return image_data
         else:
-            st.error(f"Stability API Error {response.status_code}: {response.text}")
-            return None
+            st.error(f"❌ Stability API Error {response.status_code}")
+            st.error(f"Response: {response.text[:500]}")
+            
+            # Try fallback to V1 API
+            st.write("🔄 Trying V1 API...")
+            response_v1 = requests.post(
+                "https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image",
+                headers={
+                    "Authorization": f"Bearer {api_key.strip()}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                json={
+                    "text_prompts": [
+                        {
+                            "text": f"{prompt}, professional, clean, abstract, minimal, no text, no words, no letters",
+                            "weight": 1
+                        },
+                        {
+                            "text": "blurry, bad quality, text, watermark, signature, words, letters",
+                            "weight": -1
+                        }
+                    ],
+                    "cfg_scale": 7,
+                    "height": 512,
+                    "width": 512,
+                    "samples": 1,
+                    "steps": 30,
+                },
+            )
+            
+            st.write(f"📡 V1 API Response Status: {response_v1.status_code}")
+            
+            if response_v1.status_code == 200:
+                data = response_v1.json()
+                if "artifacts" in data and len(data["artifacts"]) > 0:
+                    image_data = base64.b64decode(data["artifacts"][0]["base64"])
+                    st.success(f"✅ Image generated with V1 API! Size: {len(image_data)} bytes")
+                    return image_data
+                else:
+                    st.error(f"No image in V1 response: {data}")
+                    return None
+            else:
+                st.error(f"V1 API Error: {response_v1.text[:500]}")
+                return None
+                
     except Exception as e:
-        st.error(f"Error generating image: {str(e)}")
+        st.error(f"❌ Exception generating image: {str(e)}")
+        import traceback
+        st.error(traceback.format_exc())
         return None
 
 # Function to create PowerPoint
