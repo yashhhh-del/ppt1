@@ -328,8 +328,8 @@ with col2:
     
     image_mode = st.selectbox(
         "Image Mode *",
-        ["AI", "None"],
-        help="Select 'AI' to generate images for each slide (requires Stability AI key)"
+        ["Free Images (Unsplash)", "AI Generated (Paid)", "None"],
+        help="Free Images: Automatic relevant images from Unsplash. AI: Custom generated images (requires Stability AI key)"
     )
     
     english_variant = st.selectbox(
