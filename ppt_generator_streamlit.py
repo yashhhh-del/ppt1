@@ -72,6 +72,8 @@ with st.sidebar:
     st.markdown("### 🔗 Get API Keys")
     st.markdown("[OpenRouter API](https://openrouter.ai/keys)")
     st.markdown("[Stability AI](https://platform.stability.ai)")
+    st.markdown("---")
+    st.warning("💰 Low credits? Reduce slides or upgrade at OpenRouter")
 
 # Function to generate content using Claude via OpenRouter
 def generate_content_with_claude(api_key, topic, category, slide_count, tone, audience, key_points, model_choice):
@@ -82,6 +84,10 @@ def generate_content_with_claude(api_key, topic, category, slide_count, tone, au
             model = "google/gemini-2.0-flash-exp:free"
         else:
             model = "anthropic/claude-3.5-sonnet"
+        
+        # Calculate appropriate max_tokens based on slide count
+        # Roughly 150 tokens per slide to be safe
+        calculated_tokens = min(slide_count * 150 + 200, 1500)
         
         prompt = f"""You are an expert corporate presentation creator. Generate a detailed PowerPoint presentation structure.
 
@@ -127,7 +133,7 @@ Return ONLY valid JSON, no markdown, no explanation."""
             },
             json={
                 "model": model,
-                "max_tokens": 2000,
+                "max_tokens": calculated_tokens,  # Dynamic token allocation
                 "messages": [
                     {"role": "user", "content": prompt}
                 ]
@@ -152,7 +158,12 @@ Return ONLY valid JSON, no markdown, no explanation."""
             slides_data = json.loads(content_text)
             return slides_data["slides"]
         else:
-            st.error(f"OpenRouter API Error: {response.text}")
+            error_data = response.json()
+            if response.status_code == 402:
+                st.error("💳 Insufficient credits! Options:")
+                st.info("1. Reduce number of slides\n2. Add credits at https://openrouter.ai/settings/credits")
+            else:
+                st.error(f"OpenRouter API Error: {response.text}")
             return None
             
     except Exception as e:
@@ -294,7 +305,8 @@ with col1:
         ["Business", "Pitch", "Marketing", "Technical", "Academic", "Training"]
     )
     
-    slide_count = st.number_input("Number of Slides *", min_value=3, max_value=15, value=8)
+    slide_count = st.number_input("Number of Slides *", min_value=3, max_value=15, value=6, 
+                                   help="⚠️ More slides = more tokens needed. Start with 6-8 slides.")
     
     tone = st.selectbox(
         "Tone *",
@@ -402,5 +414,6 @@ st.markdown("""
     <p>💡 <strong>Works with ANY topic!</strong> Try: "History of Pizza", "Quantum Physics", "Yoga Benefits", "Video Game Design"</p>
     <p>🎨 Add Stability AI key to generate custom images for your topic!</p>
     <p><strong>Free Model Available</strong> - No credits needed to start!</p>
+    <p>⚠️ <strong>Low on credits?</strong> Start with 6 slides and upgrade at <a href="https://openrouter.ai/settings/credits">OpenRouter</a></p>
 </div>
 """, unsafe_allow_html=True)
