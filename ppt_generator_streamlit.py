@@ -10,7 +10,7 @@ import time
 
 # Page configuration
 st.set_page_config(
-    page_title="AI PowerPoint Generator with Stability AI",
+    page_title="AI PowerPoint Generator",
     page_icon="📊",
     layout="wide"
 )
@@ -33,37 +33,117 @@ st.markdown("""
         padding: 0.5rem;
         border-radius: 5px;
     }
-    .output-box {
-        background-color: #f0f2f6;
-        padding: 1.5rem;
-        border-radius: 10px;
-        border-left: 5px solid #1f77b4;
-        margin-top: 1rem;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # Header
-st.markdown('<div class="main-header">📊 AI PowerPoint Generator with Stability AI</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">📊 AI PowerPoint Generator</div>', unsafe_allow_html=True)
 st.markdown("---")
 
-# Sidebar for API Key
+# Sidebar for API Keys
 with st.sidebar:
-    st.header("⚙️ Configuration")
-    stability_api_key = st.text_input("Stability AI API Key", type="password", help="Enter your Stability AI API key")
+    st.header("⚙️ API Configuration")
+    
+    # Claude API Key
+    claude_api_key = st.text_input("Anthropic API Key *", type="password", help="Required: For generating presentation content")
+    
+    # Stability API Key (Optional)
+    stability_api_key = st.text_input("Stability AI API Key (Optional)", type="password", help="Optional: For AI-generated images")
+    
     st.markdown("---")
     st.markdown("### 📖 How to Use")
     st.markdown("""
-    1. Enter your Stability AI API key
-    2. Fill in presentation details
-    3. Click 'Generate Presentation'
-    4. Download your PPT with AI images
+    1. Enter Anthropic API key (required)
+    2. Enter topic and preferences
+    3. Add Stability key for AI images (optional)
+    4. Click 'Generate Presentation'
+    5. Download your custom PPT!
     """)
     st.markdown("---")
-    st.markdown("### 🔗 Get API Key")
-    st.markdown("[Get Stability AI Key](https://platform.stability.ai/)")
-    st.markdown("---")
-    st.markdown("Made with ❤️ using Stability AI")
+    st.markdown("### 🔗 Get API Keys")
+    st.markdown("[Anthropic API](https://console.anthropic.com)")
+    st.markdown("[Stability AI](https://platform.stability.ai)")
+
+# Function to generate content using Claude
+def generate_content_with_claude(api_key, topic, category, slide_count, tone, audience, key_points):
+    """Generate presentation content using Claude AI"""
+    try:
+        prompt = f"""You are an expert corporate presentation creator. Generate a detailed PowerPoint presentation structure.
+
+Topic: {topic}
+Category: {category}
+Slide Count: {slide_count}
+Tone: {tone}
+Audience: {audience}
+Additional Points: {key_points if key_points else "None"}
+
+Return ONLY a JSON structure with this exact format:
+{{
+  "slides": [
+    {{
+      "title": "Title here (max 8 words)",
+      "bullets": [],
+      "image_prompt": "description for AI image generation"
+    }},
+    {{
+      "title": "Slide title",
+      "bullets": ["Bullet 1 (max 12 words)", "Bullet 2", "Bullet 3", "Bullet 4"],
+      "image_prompt": "abstract visual description"
+    }}
+  ]
+}}
+
+Rules:
+- First slide: Title only, no bullets
+- Each slide needs: title, bullets (3-5 per slide), image_prompt
+- Bullets must be actionable and specific to the topic
+- Image prompts should be abstract, professional, no text
+- Last slide should be conclusion/next steps
+- Make content highly relevant to "{topic}"
+- Total slides: exactly {slide_count}
+
+Return ONLY valid JSON, no markdown, no explanation."""
+
+        response = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 4000,
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ]
+            }
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            content_text = data["content"][0]["text"]
+            
+            # Clean JSON response
+            content_text = content_text.strip()
+            if content_text.startswith("```json"):
+                content_text = content_text[7:]
+            if content_text.startswith("```"):
+                content_text = content_text[3:]
+            if content_text.endswith("```"):
+                content_text = content_text[:-3]
+            content_text = content_text.strip()
+            
+            import json
+            slides_data = json.loads(content_text)
+            return slides_data["slides"]
+        else:
+            st.error(f"Claude API Error: {response.text}")
+            return None
+            
+    except Exception as e:
+        st.error(f"Error generating content: {str(e)}")
+        return None
 
 # Function to generate image using Stability AI
 def generate_image_stability(api_key, prompt):
@@ -95,14 +175,12 @@ def generate_image_stability(api_key, prompt):
             image_data = base64.b64decode(data["artifacts"][0]["base64"])
             return image_data
         else:
-            st.warning(f"Image generation failed: {response.text}")
             return None
     except Exception as e:
-        st.warning(f"Error generating image: {str(e)}")
         return None
 
 # Function to create PowerPoint
-def create_powerpoint(topic, category, slide_count, tone, audience, theme, image_mode, key_points, api_key):
+def create_powerpoint(slides_content, theme, image_mode, stability_key, category, audience):
     """Create PowerPoint presentation"""
     prs = Presentation()
     prs.slide_width = Inches(10)
@@ -117,9 +195,6 @@ def create_powerpoint(topic, category, slide_count, tone, audience, theme, image
     }
     
     color_scheme = themes.get(theme, themes["Corporate Blue"])
-    
-    # Generate slide content based on category and topic
-    slides_content = generate_slide_content(topic, category, slide_count, tone, audience, key_points)
     
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -171,11 +246,11 @@ def create_powerpoint(topic, category, slide_count, tone, audience, theme, image
             subtitle_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
         
         # Generate and add image if needed
-        if image_mode in ["AI", "Mixed"] and api_key and idx > 0:
+        if image_mode in ["AI", "Mixed"] and stability_key and idx > 0:
             image_prompt = slide_data.get("image_prompt", f"abstract representation of {slide_data['title']}")
             status_text.text(f"Generating AI image for slide {idx + 1}...")
             
-            image_data = generate_image_stability(api_key, image_prompt)
+            image_data = generate_image_stability(stability_key, image_prompt)
             
             if image_data:
                 image_stream = io.BytesIO(image_data)
@@ -190,87 +265,13 @@ def create_powerpoint(topic, category, slide_count, tone, audience, theme, image
     
     return prs
 
-# Function to generate slide content
-def generate_slide_content(topic, category, slide_count, tone, audience, key_points):
-    """Generate slide content structure"""
-    slides = []
-    
-    # Slide 1: Title
-    slides.append({
-        "title": topic,
-        "bullets": [],
-        "image_prompt": None
-    })
-    
-    # Slide 2: Overview/Agenda
-    slides.append({
-        "title": "Overview",
-        "bullets": [
-            f"Understanding the {category.lower()} landscape",
-            "Key objectives and goals",
-            "Strategic approach and methodology",
-            "Expected outcomes and benefits"
-        ],
-        "image_prompt": "business strategy overview abstract"
-    })
-    
-    # Parse key points if provided
-    parsed_points = []
-    if key_points:
-        parsed_points = [p.strip('- ').strip() for p in key_points.split('\n') if p.strip()]
-    
-    # Middle slides based on category
-    if category == "Business":
-        middle_slides = [
-            {"title": "Current Market Analysis", "bullets": ["Market size and growth trends", "Competitive landscape overview", "Customer needs and pain points", "Industry challenges and opportunities"], "image_prompt": "market analysis chart abstract"},
-            {"title": "Strategic Objectives", "bullets": parsed_points[:4] if parsed_points else ["Increase market share and revenue", "Enhance operational efficiency", "Drive innovation and growth", "Strengthen brand position"], "image_prompt": "business goals target abstract"},
-            {"title": "Implementation Plan", "bullets": ["Phase-wise rollout strategy", "Resource allocation and timeline", "Key milestones and deliverables", "Risk management approach"], "image_prompt": "project timeline roadmap abstract"},
-        ]
-    elif category == "Pitch":
-        middle_slides = [
-            {"title": "The Problem", "bullets": ["Current market gap identified", "Customer pain points validated", "Size of opportunity quantified", "Urgency for solution established"], "image_prompt": "problem challenge abstract"},
-            {"title": "Our Solution", "bullets": parsed_points[:4] if parsed_points else ["Innovative approach to solve problem", "Unique value proposition delivered", "Competitive advantages highlighted", "Technology-driven implementation"], "image_prompt": "solution innovation abstract"},
-            {"title": "Business Model", "bullets": ["Revenue streams and pricing", "Customer acquisition strategy", "Scalability and growth potential", "Unit economics and profitability"], "image_prompt": "business model revenue abstract"},
-        ]
-    elif category == "Marketing":
-        middle_slides = [
-            {"title": "Target Audience", "bullets": ["Demographics and psychographics defined", "Customer personas developed", "Pain points and motivations", "Buying behavior patterns"], "image_prompt": "target audience people abstract"},
-            {"title": "Marketing Strategy", "bullets": parsed_points[:4] if parsed_points else ["Multi-channel campaign approach", "Content marketing initiatives", "Social media engagement plan", "Influencer partnerships"], "image_prompt": "marketing strategy megaphone abstract"},
-            {"title": "Campaign Execution", "bullets": ["Timeline and key milestones", "Budget allocation across channels", "Performance metrics and KPIs", "Testing and optimization plan"], "image_prompt": "campaign execution calendar abstract"},
-        ]
-    else:
-        middle_slides = [
-            {"title": "Key Concepts", "bullets": parsed_points[:4] if parsed_points else ["Fundamental principles explained", "Core components identified", "System architecture overview", "Technical requirements defined"], "image_prompt": "technology concepts abstract"},
-            {"title": "Methodology", "bullets": ["Step-by-step approach outlined", "Best practices and standards", "Tools and resources required", "Quality assurance measures"], "image_prompt": "process workflow abstract"},
-            {"title": "Implementation", "bullets": ["Practical application examples", "Hands-on demonstrations", "Common challenges addressed", "Troubleshooting guidelines"], "image_prompt": "implementation execution abstract"},
-        ]
-    
-    # Add middle slides up to slide_count - 2
-    remaining_slots = slide_count - 2
-    for i in range(min(remaining_slots - 1, len(middle_slides))):
-        slides.append(middle_slides[i])
-    
-    # Final slide: Conclusion/CTA
-    slides.append({
-        "title": "Next Steps",
-        "bullets": [
-            "Key takeaways and action items",
-            "Implementation timeline and milestones",
-            "Resources and support available",
-            "Contact information and follow-up"
-        ],
-        "image_prompt": "success achievement abstract"
-    })
-    
-    return slides[:slide_count]
-
 # Main content
 col1, col2 = st.columns([1, 1])
 
 with col1:
     st.subheader("📝 Presentation Details")
     
-    topic = st.text_input("Topic *", placeholder="e.g., Digital Marketing Strategy 2025")
+    topic = st.text_input("Topic *", placeholder="e.g., Climate Change Solutions, AI in Healthcare, Marketing Strategy 2025")
     
     category = st.selectbox(
         "Category *",
@@ -299,7 +300,7 @@ with col2:
     
     image_mode = st.selectbox(
         "Image Mode *",
-        ["AI", "Mixed", "None"]
+        ["AI", "None"]
     )
     
     english_variant = st.selectbox(
@@ -310,56 +311,75 @@ with col2:
 # Additional key points
 st.subheader("➕ Additional Key Points (Optional)")
 key_points = st.text_area(
-    "Enter key points (one per line)",
-    placeholder="- Increase market share by 25%\n- Focus on digital transformation\n- Reduce operational costs",
+    "Enter specific points you want to cover (one per line)",
+    placeholder="- Focus on sustainability\n- Include case studies\n- Emphasize ROI",
     height=100
 )
 
 # Generate button
 st.markdown("---")
-generate_button = st.button("🚀 Generate PowerPoint with AI Images", use_container_width=True)
+generate_button = st.button("🚀 Generate Custom PowerPoint", use_container_width=True)
 
 # Generation logic
 if generate_button:
-    if not topic:
+    if not claude_api_key:
+        st.error("⚠️ Please enter your Anthropic API key in the sidebar.")
+    elif not topic:
         st.error("⚠️ Please enter a topic for your presentation.")
-    elif image_mode in ["AI", "Mixed"] and not stability_api_key:
-        st.error("⚠️ Please enter your Stability AI API key in the sidebar for AI image generation.")
-    else:
-        with st.spinner("🎨 Creating your professional presentation with AI images..."):
+    elif image_mode == "AI" and not stability_api_key:
+        st.warning("⚠️ Stability AI key not provided. Generating presentation without images.")
+        image_mode = "None"
+    
+    if claude_api_key and topic:
+        with st.spinner("🤖 AI is analyzing your topic and creating custom content..."):
             try:
-                # Create PowerPoint
-                prs = create_powerpoint(
-                    topic, category, slide_count, tone, 
-                    audience, theme, image_mode, key_points, 
-                    stability_api_key if image_mode in ["AI", "Mixed"] else None
+                # Generate content with Claude
+                slides_content = generate_content_with_claude(
+                    claude_api_key, topic, category, slide_count, 
+                    tone, audience, key_points
                 )
                 
-                # Save to BytesIO
-                pptx_io = io.BytesIO()
-                prs.save(pptx_io)
-                pptx_io.seek(0)
-                
-                st.success("✅ PowerPoint created successfully with AI-generated images!")
-                
-                # Download button
-                st.download_button(
-                    label="📥 Download PowerPoint",
-                    data=pptx_io,
-                    file_name=f"{topic.replace(' ', '_')}.pptx",
-                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                )
-                
+                if slides_content:
+                    st.success("✅ Content generated! Now creating PowerPoint...")
+                    
+                    # Create PowerPoint
+                    prs = create_powerpoint(
+                        slides_content, theme, image_mode, 
+                        stability_api_key if image_mode == "AI" else None,
+                        category, audience
+                    )
+                    
+                    # Save to BytesIO
+                    pptx_io = io.BytesIO()
+                    prs.save(pptx_io)
+                    pptx_io.seek(0)
+                    
+                    st.success("🎉 PowerPoint created successfully!")
+                    
+                    # Show preview
+                    with st.expander("📄 Preview Slide Titles"):
+                        for i, slide in enumerate(slides_content):
+                            st.write(f"**Slide {i+1}:** {slide['title']}")
+                    
+                    # Download button
+                    st.download_button(
+                        label="📥 Download PowerPoint",
+                        data=pptx_io,
+                        file_name=f"{topic.replace(' ', '_')}.pptx",
+                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                    )
+                    
             except requests.exceptions.RequestException as e:
                 st.error(f"❌ API Error: {str(e)}")
             except Exception as e:
                 st.error(f"❌ An error occurred: {str(e)}")
+                st.error(f"Details: {type(e).__name__}")
 
 # Footer
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 1rem;'>
-    <p>💡 <strong>Tip:</strong> AI image generation takes time. Be patient for best results!</p>
-    <p>Get your Stability AI API key from <a href='https://platform.stability.ai/' target='_blank'>platform.stability.ai</a></p>
+    <p>💡 <strong>Tip:</strong> Be specific with your topic for best results!</p>
+    <p>Examples: "AI in Healthcare 2025", "Sustainable Energy Solutions", "Digital Marketing Trends"</p>
 </div>
 """, unsafe_allow_html=True)
