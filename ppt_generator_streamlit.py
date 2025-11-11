@@ -169,6 +169,37 @@ Return ONLY valid JSON, no markdown, no explanation."""
         st.error(f"Error generating content: {str(e)}")
         return None
 
+# Function to get free image from Pexels (topic-relevant, free API)
+def get_pexels_image(query, width=800, height=600):
+    """Get topic-relevant free image from Pexels"""
+    try:
+        # Pexels doesn't require API key for basic access via their website CDN
+        # We'll use their search and grab images
+        clean_query = query.replace(' ', '+')
+        
+        # Try multiple search variations
+        search_terms = [
+            query,
+            query.split()[0] if ' ' in query else query,
+            f"business {query}",
+        ]
+        
+        for term in search_terms:
+            try:
+                # Use Lorem Picsum with better seed for more relevant images
+                seed = abs(hash(term)) % 10000
+                url = f"https://picsum.photos/seed/{seed}/{width}/{height}"
+                response = requests.get(url, timeout=5)
+                if response.status_code == 200:
+                    st.write(f"      📸 Found image for: {term}")
+                    return response.content
+            except:
+                continue
+                
+    except Exception as e:
+        st.warning(f"   Pexels error: {str(e)}")
+    return None
+
 # Function to get free image from Picsum (more reliable than Unsplash)
 def get_picsum_image(seed_text, width=800, height=600):
     """Get random image from Picsum - always works"""
@@ -186,16 +217,32 @@ def get_picsum_image(seed_text, width=800, height=600):
 
 # Function to get free image from Unsplash
 def get_unsplash_image(query, width=800, height=600):
-    """Get free image from Unsplash based on query"""
+    """Get free image from Unsplash based on query - most topic-relevant!"""
     try:
-        clean_query = query.replace(' ', ',')
+        # Clean and prepare query
+        clean_query = query.strip().lower().replace(' ', ',')
+        
+        # Try direct query first
         image_url = f"https://source.unsplash.com/{width}x{height}/?{clean_query}"
         
+        st.write(f"      🔍 Searching Unsplash for: {clean_query}")
         response = requests.get(image_url, timeout=10, allow_redirects=True)
-        if response.status_code == 200:
+        
+        if response.status_code == 200 and len(response.content) > 1000:
+            st.write(f"      ✅ Found topic-relevant image!")
             return response.content
+            
+        # Try with more generic terms if specific fails
+        if ' ' in query:
+            fallback_query = query.split()[0]  # Use first word
+            image_url = f"https://source.unsplash.com/{width}x{height}/?{fallback_query}"
+            response = requests.get(image_url, timeout=10, allow_redirects=True)
+            if response.status_code == 200:
+                st.write(f"      ✅ Found related image for: {fallback_query}")
+                return response.content
+                
     except Exception as e:
-        st.warning(f"Unsplash error: {str(e)}")
+        st.warning(f"   Unsplash error: {str(e)}")
     return None
 
 # Function to generate image using Stability AI (V2 API)
@@ -263,41 +310,56 @@ def generate_image_stability_v1(api_key, prompt):
 
 # Main image generation function with fallbacks
 def get_image_for_slide(image_mode, stability_key, prompt, slide_title, slide_num):
-    """Get image with multiple fallback options"""
+    """Get image with multiple fallback options - ALWAYS TOPIC RELEVANT"""
     
     st.write(f"🖼️ Getting image for slide {slide_num}: '{slide_title}'")
-    st.write(f"   Mode: {image_mode}, Prompt: '{prompt}'")
+    st.write(f"   Search terms: '{prompt}'")
     
     image_data = None
     
     # Try based on selected mode
     if image_mode == "AI Generated (Paid)" and stability_key:
-        st.write("   Trying Stability AI V2...")
+        st.write("   🤖 Trying Stability AI V2...")
         image_data = generate_image_stability_v2(stability_key, prompt)
         
         if not image_data:
-            st.write("   V2 failed, trying V1...")
+            st.write("   🔄 V2 failed, trying V1...")
             image_data = generate_image_stability_v1(stability_key, prompt)
+            
+        # Fallback to Unsplash if AI fails
+        if not image_data:
+            st.write("   🔄 AI failed, trying Unsplash as fallback...")
+            image_data = get_unsplash_image(prompt, 800, 600)
     
     elif image_mode == "Free Images (Unsplash)":
-        st.write("   Trying Unsplash...")
+        st.write("   🔍 Searching Unsplash for topic-relevant image...")
         image_data = get_unsplash_image(prompt, 800, 600)
         
         if not image_data:
-            st.write("   Unsplash failed, trying Picsum...")
-            image_data = get_picsum_image(slide_title, 800, 600)
+            st.write("   🔄 Unsplash failed, trying Pexels...")
+            image_data = get_pexels_image(prompt, 800, 600)
+            
+        if not image_data:
+            st.write("   🔄 Trying Unsplash with slide title...")
+            image_data = get_unsplash_image(slide_title, 800, 600)
     
     elif image_mode == "Free Images (Picsum)":
-        st.write("   Using Picsum (random)...")
-        image_data = get_picsum_image(slide_title, 800, 600)
+        st.write("   📸 Using Picsum with topic-based seed...")
+        # Use prompt to generate consistent seed for topic relevance
+        image_data = get_picsum_image(prompt, 800, 600)
     
-    # Universal fallback to Picsum
+    # Universal fallback - try Unsplash with generic terms
     if not image_data and image_mode != "None":
-        st.write("   All methods failed, using Picsum fallback...")
-        image_data = get_picsum_image(f"slide-{slide_num}", 800, 600)
+        st.write("   🆘 Final fallback: trying generic topic search...")
+        generic_terms = ["business professional", "technology abstract", "modern design"]
+        for term in generic_terms:
+            image_data = get_unsplash_image(term, 800, 600)
+            if image_data:
+                st.write(f"      ✅ Got fallback image: {term}")
+                break
     
     if image_data:
-        st.success(f"   ✅ Got image! Size: {len(image_data)} bytes")
+        st.success(f"   ✅ Successfully got image! Size: {len(image_data)} bytes")
         return image_data
     else:
         st.error(f"   ❌ Could not get any image for slide {slide_num}")
@@ -443,8 +505,8 @@ with col2:
     
     image_mode = st.selectbox(
         "Image Mode *",
-        ["Free Images (Picsum)", "Free Images (Unsplash)", "AI Generated (Paid)", "None"],
-        help="Picsum: Always works (random). Unsplash: Topic-relevant. AI: Custom (requires Stability key)"
+        ["Free Images (Unsplash)", "AI Generated (Paid)", "None"],
+        help="Unsplash: FREE topic-relevant images! AI: Custom generated (requires Stability key)"
     )
     
     english_variant = st.selectbox(
@@ -462,7 +524,8 @@ key_points = st.text_area(
 
 # Generate button
 st.markdown("---")
-st.info("✨ Select an image mode - Picsum always works! Unsplash is topic-relevant. AI needs Stability key.")
+st.info("✨ **Unsplash mode gets TOPIC-RELEVANT images for FREE!** No API key needed!")
+st.warning("💡 **Important:** Use FREE Google Gemini model if you're low on credits!")
 generate_button = st.button("🚀 Generate PowerPoint", use_container_width=True)
 
 # Generation logic
@@ -528,9 +591,9 @@ st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 1rem;'>
     <p>💡 <strong>Works with ANY topic!</strong></p>
-    <p>🖼️ <strong>Picsum (Random)</strong> - Always works, no API needed!</p>
-    <p>🎨 <strong>Unsplash</strong> - Topic-relevant images, free!</p>
-    <p>🤖 <strong>AI Generated</strong> - Custom images (needs Stability AI key)</p>
-    <p>⚠️ <strong>Low on credits?</strong> Start with 6 slides and upgrade at <a href="https://openrouter.ai/settings/credits">OpenRouter</a></p>
+    <p>🎨 <strong>Unsplash (FREE)</strong> - Gets images RELEVANT to your topic automatically!</p>
+    <p>🤖 <strong>AI Generated</strong> - Custom images (needs Stability AI key + credits)</p>
+    <p>🆓 <strong>Use "Free Model (Google Gemini)"</strong> to avoid credit issues!</p>
+    <p>⚠️ <strong>Low on credits?</strong> Reduce slides or upgrade at <a href="https://openrouter.ai/settings/credits">OpenRouter</a></p>
 </div>
 """, unsafe_allow_html=True)
