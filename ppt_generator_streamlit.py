@@ -47,7 +47,14 @@ with st.sidebar:
     # Claude API Key
     claude_api_key = st.text_input("OpenRouter API Key *", type="password", help="Required: For generating presentation content")
     
-    st.info("💡 Using OpenRouter API (supports Claude & other models)")
+    # Model selection
+    model_choice = st.selectbox(
+        "AI Model",
+        ["Free Model (Google Gemini)", "Claude 3.5 Sonnet (Paid)"],
+        help="Free model uses your limited credits wisely"
+    )
+    
+    st.info("💡 Using OpenRouter API")
     
     # Stability API Key (Optional)
     stability_api_key = st.text_input("Stability AI API Key (Optional)", type="password", help="Optional: For AI-generated images")
@@ -67,9 +74,15 @@ with st.sidebar:
     st.markdown("[Stability AI](https://platform.stability.ai)")
 
 # Function to generate content using Claude via OpenRouter
-def generate_content_with_claude(api_key, topic, category, slide_count, tone, audience, key_points):
-    """Generate presentation content using Claude AI via OpenRouter"""
+def generate_content_with_claude(api_key, topic, category, slide_count, tone, audience, key_points, model_choice):
+    """Generate presentation content using AI via OpenRouter"""
     try:
+        # Select model based on user choice
+        if "Free" in model_choice:
+            model = "google/gemini-2.0-flash-exp:free"
+        else:
+            model = "anthropic/claude-3.5-sonnet"
+        
         prompt = f"""You are an expert corporate presentation creator. Generate a detailed PowerPoint presentation structure.
 
 Topic: {topic}
@@ -113,7 +126,8 @@ Return ONLY valid JSON, no markdown, no explanation."""
                 "Content-Type": "application/json",
             },
             json={
-                "model": "anthropic/claude-3.5-sonnet",
+                "model": model,
+                "max_tokens": 2000,
                 "messages": [
                     {"role": "user", "content": prompt}
                 ]
@@ -338,7 +352,7 @@ if generate_button:
                 # Generate content with Claude
                 slides_content = generate_content_with_claude(
                     claude_api_key, topic, category, slide_count, 
-                    tone, audience, key_points
+                    tone, audience, key_points, model_choice
                 )
                 
                 if slides_content:
