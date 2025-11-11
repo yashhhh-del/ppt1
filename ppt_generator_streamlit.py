@@ -59,6 +59,9 @@ with st.sidebar:
     # Stability API Key (Optional)
     stability_api_key = st.text_input("Stability AI API Key (Optional)", type="password", help="Optional: For AI-generated images")
     
+    if stability_api_key:
+        st.success("✅ Stability API key detected!")
+    
     st.markdown("---")
     st.markdown("### 📖 How to Use")
     st.markdown("""
@@ -170,21 +173,50 @@ Return ONLY valid JSON, no markdown, no explanation."""
         st.error(f"Error generating content: {str(e)}")
         return None
 
+# Function to get free image from Unsplash
+def get_free_image(query, width=800, height=600):
+    """Get free image from Unsplash based on query"""
+    try:
+        # Clean the query for URL
+        clean_query = query.replace(' ', ',')
+        # Use Unsplash Source API (no key required)
+        image_url = f"https://source.unsplash.com/{width}x{height}/?{clean_query}"
+        
+        response = requests.get(image_url, timeout=10)
+        if response.status_code == 200:
+            return response.content
+        else:
+            # Fallback to a generic business image
+            fallback_url = f"https://source.unsplash.com/{width}x{height}/?business,professional"
+            response = requests.get(fallback_url, timeout=10)
+            if response.status_code == 200:
+                return response.content
+    except Exception as e:
+        st.warning(f"Could not fetch image: {str(e)}")
+    return None
+
 # Function to generate image using Stability AI
 def generate_image_stability(api_key, prompt):
     """Generate image using Stability AI API"""
     try:
+        st.write(f"🎨 Generating AI image with prompt: {prompt[:50]}...")
+        
         response = requests.post(
             "https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image",
             headers={
-                "Authorization": f"Bearer {api_key}",
+                "Authorization": f"Bearer {api_key.strip()}",
                 "Content-Type": "application/json",
+                "Accept": "application/json",
             },
             json={
                 "text_prompts": [
                     {
                         "text": f"{prompt}, professional, clean, abstract, minimal, no text, no words, no letters",
                         "weight": 1
+                    },
+                    {
+                        "text": "blurry, bad quality, text, watermark, signature, words, letters",
+                        "weight": -1
                     }
                 ],
                 "cfg_scale": 7,
@@ -197,11 +229,18 @@ def generate_image_stability(api_key, prompt):
         
         if response.status_code == 200:
             data = response.json()
-            image_data = base64.b64decode(data["artifacts"][0]["base64"])
-            return image_data
+            if "artifacts" in data and len(data["artifacts"]) > 0:
+                image_data = base64.b64decode(data["artifacts"][0]["base64"])
+                st.success(f"✅ Image generated successfully!")
+                return image_data
+            else:
+                st.error(f"No image in response: {data}")
+                return None
         else:
+            st.error(f"Stability API Error {response.status_code}: {response.text}")
             return None
     except Exception as e:
+        st.error(f"Error generating image: {str(e)}")
         return None
 
 # Function to create PowerPoint
@@ -270,20 +309,45 @@ def create_powerpoint(slides_content, theme, image_mode, stability_key, category
             subtitle_frame.paragraphs[0].font.color.rgb = color_scheme["text"]
             subtitle_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
         
-        # Generate and add image if needed
-        if image_mode in ["AI", "Mixed"] and stability_key and idx > 0:
-            image_prompt = slide_data.get("image_prompt", f"abstract representation of {slide_data['title']}")
-            status_text.text(f"Generating AI image for slide {idx + 1}...")
+        # Generate and add image to every slide (except first title slide)
+        if idx > 0:
+            image_data = None
             
-            image_data = generate_image_stability(stability_key, image_prompt)
+            if image_mode == "Free Images (Unsplash)":
+                # Get free image from Unsplash
+                image_query = slide_data.get("image_prompt", slide_data["title"])
+                status_text.text(f"📥 Fetching free image for slide {idx + 1}...")
+                image_data = get_free_image(image_query)
+                
+            elif image_mode == "AI Generated (Paid)" and stability_key:
+                # Generate AI image with Stability
+                image_prompt = slide_data.get("image_prompt", f"abstract representation of {slide_data['title']}")
+                status_text.text(f"🎨 Generating AI image for slide {idx + 1}...")
+                
+                with st.expander(f"🖼️ Generating image for slide {idx + 1}", expanded=True):
+                    image_data = generate_image_stability(stability_key, image_prompt)
+                
+                if image_data:
+                    st.success(f"✅ Image added to slide {idx + 1}")
+                else:
+                    st.warning(f"⚠️ Could not generate image for slide {idx + 1}")
+                
+                time.sleep(2)  # Rate limiting for Stability API
             
+            # Add image to slide if we got one
             if image_data:
-                image_stream = io.BytesIO(image_data)
-                left = Inches(6.5)
-                top = Inches(2)
-                pic = slide.shapes.add_picture(image_stream, left, top, height=Inches(4))
-            
-            time.sleep(1)
+                try:
+                    image_stream = io.BytesIO(image_data)
+                    left = Inches(6.5)
+                    top = Inches(2)
+                    width = Inches(3)
+                    pic = slide.shapes.add_picture(image_stream, left, top, width=width)
+                    status_text.text(f"✅ Image added to slide {idx + 1}")
+                except Exception as e:
+                    st.error(f"❌ Could not add image to slide {idx + 1}: {str(e)}")
+            else:
+                if image_mode != "None":
+                    st.warning(f"⚠️ No image available for slide {idx + 1}")
     
     progress_bar.progress(1.0)
     status_text.text("✅ Presentation created successfully!")
@@ -358,13 +422,17 @@ if generate_button:
         st.error("⚠️ Invalid OpenRouter API key format. It should start with 'sk-or-'")
     elif not topic:
         st.error("⚠️ Please enter a topic for your presentation.")
-    elif image_mode == "AI" and not stability_api_key:
-        st.warning("⚠️ Stability AI key not provided. Generating presentation without images.")
-        image_mode = "None"
+    elif image_mode == "AI Generated (Paid)" and not stability_api_key:
+        st.error("⚠️ Stability AI key required for AI Generated images. Please add your key or switch to 'Free Images' mode.")
+    else:
+        # Validation passed, proceed
+        pass
     
-    if claude_api_key and topic:
+    if claude_api_key and topic and not (image_mode == "AI Generated (Paid)" and not stability_api_key):
         with st.spinner("🤖 AI is analyzing your topic and creating custom content..."):
             try:
+                st.info(f"🎨 Image Mode: {image_mode}")
+                
                 # Generate content with Claude
                 slides_content = generate_content_with_claude(
                     claude_api_key, topic, category, slide_count, 
@@ -377,7 +445,7 @@ if generate_button:
                     # Create PowerPoint
                     prs = create_powerpoint(
                         slides_content, theme, image_mode, 
-                        stability_api_key if image_mode == "AI" else None,
+                        stability_api_key if image_mode == "AI Generated (Paid)" else None,
                         category, audience
                     )
                     
@@ -412,7 +480,8 @@ st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 1rem;'>
     <p>💡 <strong>Works with ANY topic!</strong> Try: "History of Pizza", "Quantum Physics", "Yoga Benefits", "Video Game Design"</p>
-    <p>🎨 Add Stability AI key to generate custom images for your topic!</p>
+    <p>🎨 <strong>FREE IMAGES:</strong> Select "Free Images (Unsplash)" to add automatic images to every slide!</p>
+    <p>🤖 <strong>AI IMAGES:</strong> Add Stability AI key for custom AI-generated images!</p>
     <p><strong>Free Model Available</strong> - No credits needed to start!</p>
     <p>⚠️ <strong>Low on credits?</strong> Start with 6 slides and upgrade at <a href="https://openrouter.ai/settings/credits">OpenRouter</a></p>
 </div>
