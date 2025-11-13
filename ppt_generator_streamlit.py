@@ -51,9 +51,17 @@ with st.sidebar:
     
     model_choice = st.selectbox(
         "AI Model",
-        ["Free Model (Google Gemini)", "Claude 3.5 Sonnet (Paid)"],
-        help="Free model uses your limited credits wisely"
+        [
+            "Free Model (Google Gemini Flash)",
+            "Free Model (Meta Llama 3.2)",
+            "Free Model (Mistral 7B)",
+            "Claude 3.5 Sonnet (Paid)"
+        ],
+        help="Try different free models if one is rate-limited"
     )
+    
+    if "Free" in model_choice:
+        st.info("💡 Free models share rate limits. Switch models if limited.")
     
     st.info("💡 Using OpenRouter API")
     
@@ -236,7 +244,16 @@ def generate_image_stability(api_key, prompt):
 def generate_content_with_claude(api_key, topic, category, slide_count, tone, audience, key_points, model_choice):
     """Generate presentation content using AI"""
     try:
-        model = "google/gemini-2.0-flash-exp:free" if "Free" in model_choice else "anthropic/claude-3.5-sonnet"
+        # Model selection logic
+        if "Gemini" in model_choice:
+            model = "google/gemini-2.0-flash-exp:free"
+        elif "Llama" in model_choice:
+            model = "meta-llama/llama-3.2-3b-instruct:free"
+        elif "Mistral" in model_choice:
+            model = "mistralai/mistral-7b-instruct:free"
+        else:
+            model = "anthropic/claude-3.5-sonnet"
+        
         calculated_tokens = min(slide_count * 150 + 200, 1500)
         
         prompt = f"""You are an expert presentation creator. Generate a PowerPoint structure about: {topic}
@@ -282,7 +299,8 @@ Return ONLY JSON, no markdown."""
                 "model": model,
                 "max_tokens": calculated_tokens,
                 "messages": [{"role": "user", "content": prompt}]
-            }
+            },
+            timeout=30
         )
         
         if response.status_code == 200:
@@ -302,15 +320,47 @@ Return ONLY JSON, no markdown."""
             slides_data = json.loads(content_text)
             return slides_data["slides"]
         else:
-            if response.status_code == 402:
+            # Enhanced error handling
+            if response.status_code == 429:
+                error_data = response.json()
+                error_msg = error_data.get("error", {}).get("metadata", {}).get("raw", "Rate limited")
+                st.error(f"⏱️ Rate Limit: Model is temporarily unavailable")
+                st.info("💡 **Solutions:**\n- Wait 30-60 seconds and try again\n- Switch to a different free model above\n- Use Claude 3.5 Sonnet (paid but reliable)")
+                raise Exception("Rate limit - retry needed")
+            elif response.status_code == 402:
                 st.error("💳 Insufficient credits! Reduce slides or add credits.")
             else:
                 st.error(f"API Error: {response.text}")
             return None
             
+    except json.JSONDecodeError as e:
+        st.error(f"JSON parsing error: {str(e)}")
+        return None
     except Exception as e:
+        if "Rate limit" in str(e):
+            raise  # Re-raise for retry logic
         st.error(f"Error: {str(e)}")
         return None
+
+def generate_content_with_retry(api_key, topic, category, slide_count, tone, audience, key_points, model_choice, max_retries=3):
+    """Generate content with automatic retry on rate limit"""
+    for attempt in range(max_retries):
+        try:
+            result = generate_content_with_claude(api_key, topic, category, slide_count, tone, audience, key_points, model_choice)
+            if result:
+                return result
+        except Exception as e:
+            if "Rate limit" in str(e) or "429" in str(e):
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 5  # 5, 10, 15 seconds
+                    st.warning(f"⏳ Rate limit hit. Retrying in {wait_time} seconds... (Attempt {attempt + 2}/{max_retries})")
+                    time.sleep(wait_time)
+                else:
+                    st.error("❌ Rate limit persists after retries. Please:\n1. Wait 1-2 minutes\n2. Switch to different free model\n3. Use Claude model (paid)")
+                    return None
+            else:
+                return None
+    return None
 
 # ============ POWERPOINT CREATION ============
 
@@ -456,7 +506,8 @@ if generate_button:
         st.error("⚠️ Enter a topic")
     else:
         with st.spinner("🤖 Generating your presentation..."):
-            slides_content = generate_content_with_claude(
+            # Use retry function
+            slides_content = generate_content_with_retry(
                 claude_api_key, topic, category, slide_count, 
                 tone, audience, key_points, model_choice
             )
